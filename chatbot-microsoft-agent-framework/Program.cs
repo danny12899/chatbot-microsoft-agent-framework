@@ -57,7 +57,7 @@ void InsertDocument(string content, string embedding)
 
 async Task TestHandoff()
 {
-    var client = new AzureOpenAIClient(new Uri("https://azure1267889.openai.azure.com"),
+    var client = new AzureOpenAIClient(new Uri(""),
         new AzureCliCredential())
             .GetChatClient("gpt-4o")
             .AsIChatClient();
@@ -121,7 +121,7 @@ Task.Run(async () =>
     await TestHandoff();
 
     var client = new AzureOpenAIClient(
-      new Uri("https://azure1267889.openai.azure.com"),
+      new Uri(""),
       new AzureCliCredential());
 
     var embeddingClient = client.GetEmbeddingClient("text-embedding-ada-002");
