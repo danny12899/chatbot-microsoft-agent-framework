@@ -57,7 +57,7 @@ void InsertDocument(string content, string embedding)
 
 async Task TestHandoff()
 {
-    var client = new AzureOpenAIClient(new Uri(""),
+    var client = new AzureOpenAIClient(new Uri("https://azure1267889.openai.azure.com"),
         new AzureCliCredential())
             .GetChatClient("gpt-4o")
             .AsIChatClient();
@@ -79,12 +79,6 @@ async Task TestHandoff()
         "Routes messages to the appropriate specialist agent");
 
 
-    var workflow = AgentWorkflowBuilder.CreateHandoffBuilderWith(triageAgent)
-    .WithHandoffs(triageAgent, [mathTutor, grammarTutor]) // Triage can route to either specialist
-    .WithHandoff(mathTutor, triageAgent)                  // Math tutor can return to triage
-    .WithHandoff(grammarTutor, triageAgent)               // History tutor can return to triage
-    .Build();
-
     List<Microsoft.Extensions.AI.ChatMessage> messages = new();
 
     while (true)
@@ -93,6 +87,11 @@ async Task TestHandoff()
         string userInput = Console.ReadLine()!;
         messages.Add(new(ChatRole.User, userInput));
 
+        var workflow = AgentWorkflowBuilder.CreateHandoffBuilderWith(triageAgent)
+           .WithHandoffs(triageAgent, [mathTutor, grammarTutor]) // Triage can route to either specialist
+           .WithHandoff(mathTutor, triageAgent)                  // Math tutor can return to triage
+           .WithHandoff(grammarTutor, triageAgent)               // History tutor can return to triage
+           .Build();
 
         // Execute workflow and process events
         StreamingRun run = await InProcessExecution.StreamAsync(workflow, messages);
@@ -122,7 +121,7 @@ Task.Run(async () =>
     await TestHandoff();
 
     var client = new AzureOpenAIClient(
-      new Uri(""),
+      new Uri("https://azure1267889.openai.azure.com"),
       new AzureCliCredential());
 
     var embeddingClient = client.GetEmbeddingClient("text-embedding-ada-002");
