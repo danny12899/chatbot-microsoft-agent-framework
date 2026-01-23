@@ -1,9 +1,19 @@
 ﻿using Azure.AI.OpenAI;
+using Azure.AI.OpenAI;
+using Azure.Identity;
 using Azure.Identity;
 using Microsoft.Agents.AI;
+using Microsoft.Agents.AI;
+using Microsoft.Agents.AI.Workflows;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.AI;
 using OpenAI.Chat;
+using System;
+using System.Collections.Generic;
+using System.Net;
+using System.Reflection;
+using System.Threading.Tasks;
 
 //USE [test_vector]
 //GO
@@ -45,8 +55,72 @@ void InsertDocument(string content, string embedding)
     cmd.ExecuteNonQuery();
 }
 
+async Task TestHandoff()
+{
+    var client = new AzureOpenAIClient(new Uri(""),
+        new AzureCliCredential())
+            .GetChatClient("gpt-4o")
+            .AsIChatClient();
+
+
+    ChatClientAgent grammarTutor = new(client,
+    "You provide assistance with grammar queries. Explain your reasoning at each step and include examples. Only respond about grammar.",
+    "grammar_tutor",
+    "Specialist agent for grammar questions");
+
+    ChatClientAgent mathTutor = new(client,
+        "You provide help with math problems. Explain your reasoning at each step and include examples. Only respond about math.",
+        "math_tutor",
+        "Specialist agent for math questions");
+
+    ChatClientAgent triageAgent = new(client,
+        "You determine which agent to use based on the user's question. ALWAYS handoff to another agent.",
+        "triage_agent",
+        "Routes messages to the appropriate specialist agent");
+
+
+    var workflow = AgentWorkflowBuilder.CreateHandoffBuilderWith(triageAgent)
+    .WithHandoffs(triageAgent, [mathTutor, grammarTutor]) // Triage can route to either specialist
+    .WithHandoff(mathTutor, triageAgent)                  // Math tutor can return to triage
+    .WithHandoff(grammarTutor, triageAgent)               // History tutor can return to triage
+    .Build();
+
+    List<Microsoft.Extensions.AI.ChatMessage> messages = new();
+
+    while (true)
+    {
+        Console.Write("Q: ");
+        string userInput = Console.ReadLine()!;
+        messages.Add(new(ChatRole.User, userInput));
+
+
+        // Execute workflow and process events
+        StreamingRun run = await InProcessExecution.StreamAsync(workflow, messages);
+        await run.TrySendMessageAsync(new TurnToken(emitEvents: true));
+
+        List<Microsoft.Extensions.AI.ChatMessage> newMessages = new();
+        await foreach (WorkflowEvent evt in run.WatchStreamAsync().ConfigureAwait(false))
+        {
+            if (evt is AgentResponseUpdateEvent e)
+            {
+                Console.WriteLine($"{e.ExecutorId}: {e.Data}");
+            }
+            else if (evt is WorkflowOutputEvent outputEvt)
+            {
+                newMessages = (List<Microsoft.Extensions.AI.ChatMessage>)outputEvt.Data!;
+                break;
+            }
+        }
+
+        // Add new messages to conversation history
+        messages.AddRange(newMessages.Skip(messages.Count));
+    }
+}
+
 Task.Run(async () =>
 {
+    await TestHandoff();
+
     var client = new AzureOpenAIClient(
       new Uri(""),
       new AzureCliCredential());
