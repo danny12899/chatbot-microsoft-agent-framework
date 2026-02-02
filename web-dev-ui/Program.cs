@@ -24,7 +24,7 @@ AIAgent triageAgent = azureOpenAIClient.GetChatClient("gpt-4o").CreateAIAgent(
 
 AIAgent mathAgent = azureOpenAIClient.GetChatClient("gpt-4o").CreateAIAgent(
     name: "Math Agent",
-    instructions: "You provide help with math problems. Answer the question and explain your reasoning at each step and include examples. Only respond about math."
+    instructions: "You provide help with math problems. Answer the question and Explain your reasoning at each step and include examples. Only respond about math."
     );
 
 AIAgent grammarAgent = azureOpenAIClient.GetChatClient("gpt-4o").CreateAIAgent(
