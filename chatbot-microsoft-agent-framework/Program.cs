@@ -40,8 +40,8 @@ var indexClient = new SearchIndexClient(new Uri(searchEndpoint), credential);
 
 //await UploadFileContent("3", "test3.txt", "My name is Bob. My favourite color is Green.");
 //await AskQuestion("What is Bob's favourite color?");
-
-await TestKnowledgeSource();
+//await TestKnowledgeSource();
+await Handoff();
 
 async Task UploadFileContent(string id, string fileName, string extractedText)
 {
@@ -239,8 +239,8 @@ async Task TestKnowledgeSource()
     var baseClient = new KnowledgeBaseRetrievalClient(
         endpoint: new Uri(searchEndpoint),
         knowledgeBaseName: knowledgeBaseName,
-        credential : credential
-        //tokenCredential: new DefaultAzureCredential()
+        //credential : credential
+        tokenCredential: new DefaultAzureCredential()
     );
 
     string query = @"Why do suburban belts display larger December brightening than urban cores even though absolute light levels are higher downtown? Why is the Phoenix nighttime street grid is so sharply visible from space, whereas large stretches of the interstate between midwestern cities remain comparatively dim?";
@@ -302,74 +302,202 @@ async Task TestKnowledgeSource()
 
 }
 
+async Task Handoff()
+{
 
+    AzureOpenAIClient azureOpenAIClient = new(
+       new Uri(aoaiEndpoint),
+       new DefaultAzureCredential());
 
+    Console.WriteLine("1: Chat with Math Agent");
+    Console.WriteLine("2: Practice Group Remap");
 
-
-
-
-
-AzureOpenAIClient azureClient = new(
-    new Uri(aoaiEndpoint),
-    new DefaultAzureCredential());
-
-OpenAIFileClient fileClient = azureClient.GetOpenAIFileClient();
-using FileStream fs = File.OpenRead("test.txt");
-// Use FileUploadPurpose.Assistants and a string filename
-OpenAIFile uploadedFile = await fileClient.UploadFileAsync(
-    fs,
-    "test.txt",
-    FileUploadPurpose.Assistants); // Correct replacement for OpenAIFilePurpose
-
-// 3. Attach to a Vector Store (Azure AI Search-backed)
-#pragma warning disable OPENAI001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
-VectorStoreClient vectorClient = azureClient.GetVectorStoreClient();
-
-VectorStore store = await vectorClient.CreateVectorStoreAsync(
-    new VectorStoreCreationOptions { Name = "KnowledgeBase" });
-
-await vectorClient.AddFileToVectorStoreAsync(store.Id, uploadedFile.Id);
-
-// 4. Create Agent (Assistant) with File Search
-AssistantClient assistantClient = azureClient.GetAssistantClient();
-Assistant assistant = await assistantClient.CreateAssistantAsync(
-    model: "gpt-4o",
-    new AssistantCreationOptions
+    var userInput = Console.ReadLine();
+    if (userInput == "1")
     {
-        Tools = { new FileSearchToolDefinition() },
-        ToolResources = new()
+        var triageAgent = azureOpenAIClient.GetChatClient("gpt-4o").CreateAIAgent(
+            name: "Triage Agent",
+            instructions: "You determine which agent to use based on the user's question. ALWAYS handoff to another agent."
+        );
+
+        var mathAgent = azureOpenAIClient.GetChatClient("gpt-4o").CreateAIAgent(
+            name: "Math Agent",
+            instructions: "You provide help with math problems. Answer the question and Explain your reasoning at each step and include examples. Only respond about math."
+        );
+
+
+        List<Microsoft.Extensions.AI.ChatMessage> messages = new();
+
+        while (true)
         {
-            FileSearch = new() { VectorStoreIds = { store.Id } }
+            var workflow = AgentWorkflowBuilder.CreateHandoffBuilderWith(triageAgent)
+               .WithHandoffs(triageAgent, [mathAgent])
+               .WithHandoff(mathAgent, triageAgent)
+               .Build();
+
+            Console.Write("Q: ");
+            string _userInput = Console.ReadLine()!;
+            messages.Add(new(ChatRole.User, _userInput));
+
+            // Execute workflow and process events
+            StreamingRun run = await InProcessExecution.StreamAsync(workflow, messages);
+            await run.TrySendMessageAsync(new TurnToken(emitEvents: true));
+
+            List<Microsoft.Extensions.AI.ChatMessage> newMessages = new();
+            await foreach (WorkflowEvent evt in run.WatchStreamAsync().ConfigureAwait(false))
+            {
+                if (evt is AgentResponseUpdateEvent e)
+                {
+                    //Console.WriteLine($"{e.ExecutorId}: {e.Data}");
+                }
+                else if (evt is WorkflowOutputEvent outputEvt)
+                {
+                    newMessages = (List<Microsoft.Extensions.AI.ChatMessage>)outputEvt.Data!;
+                    break;
+                }
+            }
+
+            Console.WriteLine($"A: {newMessages.Skip(messages.Count).FirstOrDefault().Text}");
+            messages.AddRange(newMessages.Skip(messages.Count));
         }
-    });
-
-
-
-AssistantThread thread = await assistantClient.CreateThreadAsync();
-await assistantClient.CreateMessageAsync(
-    thread.Id,
-    MessageRole.User,
-    ["What is Bob's favourite color?"]
-);
-
-ThreadRun run = await assistantClient.CreateRunAsync(thread.Id, assistant.Id);
-
-// 5. Poll for completion
-while (run.Status == OpenAI.Assistants.RunStatus.Queued || run.Status == OpenAI.Assistants.RunStatus.InProgress)
-{
-    await Task.Delay(1000);
-    run = await assistantClient.GetRunAsync(thread.Id, run.Id);
-}
-
-// 6. Retrieve the response messages
-var messages = assistantClient.GetMessagesAsync(thread.Id);
-await foreach (ThreadMessage msg in messages)
-{
-    if (msg.Role == MessageRole.Assistant)
+    }
+    else if (userInput == "2")
     {
-        Console.WriteLine($"Assistant: {msg.Content[0].Text}");
+        Console.WriteLine("Enter path to CSV file");
+        var filePath = Console.ReadLine();
+        if (File.Exists(filePath))
+        {
+            string csvContent = File.ReadAllText(filePath);
+
+            var fileCleaner = azureOpenAIClient.GetChatClient("gpt-4o").CreateAIAgent(
+                name: "File Cleaner Agent",
+                instructions: """
+                The input string is in a csv file format.
+                Go through each value in the csv file and repalce ' with ''
+                Reply with only the end result
+                """
+            );
+
+            var cleanedCsv = await fileCleaner.RunAsync(csvContent);
+
+            var practiceGroupAgent = azureOpenAIClient.GetChatClient("gpt-4o").CreateAIAgent(
+                name: "Practice Group Agent",
+                instructions: """
+                Using the below list of practice groups with its corresponding ID
+
+                General, 001
+                IT, 002
+                Mergers and Acquisitions, 003
+                Banking, 004
+                Real Estate, 005
+                I.P. Litigation, 006
+                ...
+
+                The input string is in a csv file format.
+                Go through each value in the csv file and repalce the NewPracticeGroups column value with the corresponding IDs for example
+
+                General;IT
+
+                repalce with
+
+                001;002
+
+                Reply with only the end result
+                """
+            );
+            var newPracticeGroupCsv = await practiceGroupAgent.RunAsync(cleanedCsv.Text);
+
+            var sqlGenerator = azureOpenAIClient.GetChatClient("gpt-4o").CreateAIAgent(
+              name: "Sql Generator Agent",
+              instructions: """
+                The input string is in a csv file format.
+                Go through each row in the csv file and follow the below steps
+                    1. print "DELETE * FROM ActivityPracticeGroup WHERE ID =" then print the ID value of the row
+                    2. For each NewPracticeGroup value
+                        a. print "INSERT INTO ActivityPracticeGroup VALUES (" then print the ID value of the row then , then the NewPracticeGroup value
+                    3. print a new line
+                Reply with only the end result
+                """
+            );
+
+            var sql = await sqlGenerator.RunAsync(newPracticeGroupCsv.Text);
+            Console.WriteLine(sql);
+        }
+        else
+        {
+            Console.WriteLine("File not found.");
+        }
     }
 }
+
+
+
+
+
+
+
+
+//AzureOpenAIClient azureClient = new(
+//    new Uri(aoaiEndpoint),
+//    new DefaultAzureCredential());
+
+//OpenAIFileClient fileClient = azureClient.GetOpenAIFileClient();
+//using FileStream fs = File.OpenRead("test.txt");
+//// Use FileUploadPurpose.Assistants and a string filename
+//OpenAIFile uploadedFile = await fileClient.UploadFileAsync(
+//    fs,
+//    "test.txt",
+//    FileUploadPurpose.Assistants); // Correct replacement for OpenAIFilePurpose
+
+//// 3. Attach to a Vector Store (Azure AI Search-backed)
+//#pragma warning disable OPENAI001 // Type is for evaluation purposes only and is subject to change or removal in future updates. Suppress this diagnostic to proceed.
+//VectorStoreClient vectorClient = azureClient.GetVectorStoreClient();
+
+//VectorStore store = await vectorClient.CreateVectorStoreAsync(
+//    new VectorStoreCreationOptions { Name = "KnowledgeBase" });
+
+//await vectorClient.AddFileToVectorStoreAsync(store.Id, uploadedFile.Id);
+
+//// 4. Create Agent (Assistant) with File Search
+//AssistantClient assistantClient = azureClient.GetAssistantClient();
+//Assistant assistant = await assistantClient.CreateAssistantAsync(
+//    model: "gpt-4o",
+//    new AssistantCreationOptions
+//    {
+//        Tools = { new FileSearchToolDefinition() },
+//        ToolResources = new()
+//        {
+//            FileSearch = new() { VectorStoreIds = { store.Id } }
+//        }
+//    });
+
+
+
+//AssistantThread thread = await assistantClient.CreateThreadAsync();
+//await assistantClient.CreateMessageAsync(
+//    thread.Id,
+//    MessageRole.User,
+//    ["What is Bob's favourite color?"]
+//);
+
+//ThreadRun run = await assistantClient.CreateRunAsync(thread.Id, assistant.Id);
+
+//// 5. Poll for completion
+//while (run.Status == OpenAI.Assistants.RunStatus.Queued || run.Status == OpenAI.Assistants.RunStatus.InProgress)
+//{
+//    await Task.Delay(1000);
+//    run = await assistantClient.GetRunAsync(thread.Id, run.Id);
+//}
+
+//// 6. Retrieve the response messages
+//var messages = assistantClient.GetMessagesAsync(thread.Id);
+//await foreach (ThreadMessage msg in messages)
+//{
+//    if (msg.Role == MessageRole.Assistant)
+//    {
+//        Console.WriteLine($"Assistant: {msg.Content[0].Text}");
+//    }
+//}
 
 
 //USE [test_vector]
@@ -474,42 +602,42 @@ async Task TestHandoff()
 }
 
 
-Task.Run(async () =>
-{
-    await TestHandoff();
+//Task.Run(async () =>
+//{
+//    await TestHandoff();
 
-    WebApplicationBuilder builder = WebApplication.CreateBuilder();
+//    WebApplicationBuilder builder = WebApplication.CreateBuilder();
 
 
-    var client = new AzureOpenAIClient(
-      new Uri(aoaiEndpoint),
-      new AzureCliCredential());
+//    var client = new AzureOpenAIClient(
+//      new Uri(aoaiEndpoint),
+//      new AzureCliCredential());
 
-    var embeddingClient = client.GetEmbeddingClient("text-embedding-ada-002");
+//    var embeddingClient = client.GetEmbeddingClient("text-embedding-ada-002");
 
-    var embeddingResponse = await embeddingClient.GenerateEmbeddingAsync("work");
-    var vectorJson = $"[{string.Join(",", embeddingResponse.Value.ToFloats().ToArray())}]";
+//    var embeddingResponse = await embeddingClient.GenerateEmbeddingAsync("work");
+//    var vectorJson = $"[{string.Join(",", embeddingResponse.Value.ToFloats().ToArray())}]";
 
-    InsertDocument("Sql Server 2025 supports native vector search", vectorJson);
+//    InsertDocument("Sql Server 2025 supports native vector search", vectorJson);
 
-    // Query SQL Server 2025 with VECTOR
-    string context = "";
-    using var conn = new SqlConnection("Data Source=localhost;Initial Catalog=test_vector;Integrated Security=True;Pooling=False;Encrypt=False;Trust Server Certificate=False");
-    await conn.OpenAsync();
+//    // Query SQL Server 2025 with VECTOR
+//    string context = "";
+//    using var conn = new SqlConnection("Data Source=localhost;Initial Catalog=test_vector;Integrated Security=True;Pooling=False;Encrypt=False;Trust Server Certificate=False");
+//    await conn.OpenAsync();
 
-    using var cmd = new SqlCommand("SearchContext", conn);
-    cmd.CommandType = System.Data.CommandType.StoredProcedure;
-    cmd.Parameters.AddWithValue("@QueryEmbedding", vectorJson);
+//    using var cmd = new SqlCommand("SearchContext", conn);
+//    cmd.CommandType = System.Data.CommandType.StoredProcedure;
+//    cmd.Parameters.AddWithValue("@QueryEmbedding", vectorJson);
 
-    using var reader = await cmd.ExecuteReaderAsync();
-    while (await reader.ReadAsync())
-    {
-        context += reader["Content"].ToString() + "\n---\n";
-    }
+//    using var reader = await cmd.ExecuteReaderAsync();
+//    while (await reader.ReadAsync())
+//    {
+//        context += reader["Content"].ToString() + "\n---\n";
+//    }
 
-    Console.WriteLine(string.IsNullOrEmpty(context) ? "No relevant info found." : context);
+//    Console.WriteLine(string.IsNullOrEmpty(context) ? "No relevant info found." : context);
 
-}).GetAwaiter().GetResult();
+//}).GetAwaiter().GetResult();
 
 
 
