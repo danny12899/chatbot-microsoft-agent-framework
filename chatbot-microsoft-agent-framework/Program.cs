@@ -1,6 +1,5 @@
 ﻿using Azure;
 using Azure.AI.OpenAI;
-using Azure.AI.Projects;
 using Azure.Identity;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes;
@@ -8,23 +7,15 @@ using Azure.Search.Documents.Indexes.Models;
 using Azure.Search.Documents.KnowledgeBases;
 using Azure.Search.Documents.KnowledgeBases.Models;
 using Azure.Search.Documents.Models;
+using HtmlAgilityPack;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Workflows;
-using Microsoft.AspNetCore.Builder;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Configuration;
-using Microsoft.SemanticKernel.Connectors.OpenAI;
+using Microsoft.Playwright;
 using OpenAI.Assistants;
 using OpenAI.Chat;
-using OpenAI.Files;
-using OpenAI.VectorStores;
-using System;
-using System.Collections.Generic;
-using System.Net;
-using System.Reflection;
 using System.Text.Json;
-using System.Threading.Tasks;
 
 
 
@@ -302,6 +293,59 @@ async Task TestKnowledgeSource()
 
 }
 
+async Task SummarizeWebPages()
+{
+    var urls = new List<(string, string, string)>
+    {
+        ("CNBC Market Banner", "https://www.cnbc.com/", "//div[contains(@class, 'MarketsBanner-main')]"),
+        ("CNBC", "https://www.cnbc.com/2026/03/11/stock-market-today-live-updates.html", "//body"),
+        ("CNN Fear and Greed Index", "https://www.cnn.com/markets/fear-and-greed", "//div[contains(@class, 'layout__content-wrapper layout-with-rail__content-wrapper')]"),
+        ("Yahoo Finance", "https://finance.yahoo.com/", "//section[contains(@class, 'mainContainer ')]"),
+        ("Weather", "https://www.wunderground.com/weather/us/ny/new-york-city", "//div[contains(@class, 'today-forecast-wrap')]"),
+    };
+
+
+
+
+    using var playwright = await Playwright.CreateAsync();
+    await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions {  Headless = true });
+
+
+    foreach(var url in urls)
+    {
+        var page = await browser.NewPageAsync();
+
+        await page.GotoAsync(url.Item2);
+        await Task.Delay(2000);
+
+        var content = await page.ContentAsync();
+
+        var doc = new HtmlDocument();
+        doc.LoadHtml(content);
+        var body = doc.DocumentNode.SelectSingleNode(url.Item3).InnerText;
+
+
+        AzureOpenAIClient azureOpenAIClient = new(
+           new Uri(aoaiEndpoint),
+           new DefaultAzureCredential());
+
+        var summarizeAgent = azureOpenAIClient.GetChatClient("gpt-4o").CreateAIAgent(
+                name: "Summarize Agent",
+                instructions: "You summarize an article."
+            );
+
+        var response = await summarizeAgent.RunAsync(body.Length > 15000 ? body[..15000] : body);
+
+
+        Console.WriteLine();
+        Console.WriteLine("----------------------------------");
+        Console.WriteLine(url.Item1);
+        Console.WriteLine("----------------------------------");
+        Console.WriteLine(response);
+    }
+    
+}
+
 async Task Handoff()
 {
 
@@ -311,6 +355,7 @@ async Task Handoff()
 
     Console.WriteLine("1: Chat with Math Agent");
     Console.WriteLine("2: Practice Group Remap");
+    Console.WriteLine("3: Summarize web pages");
 
     var userInput = Console.ReadLine();
     if (userInput == "1")
@@ -427,6 +472,10 @@ async Task Handoff()
         {
             Console.WriteLine("File not found.");
         }
+    }
+    else if (userInput == "3")
+    {
+        await SummarizeWebPages();
     }
 }
 
