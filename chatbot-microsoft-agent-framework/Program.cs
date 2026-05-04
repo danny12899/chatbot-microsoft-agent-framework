@@ -1,5 +1,6 @@
 ﻿using Azure;
 using Azure.AI.OpenAI;
+using Azure.AI.Projects;
 using Azure.Identity;
 using Azure.Search.Documents;
 using Azure.Search.Documents.Indexes;
@@ -360,6 +361,7 @@ async Task Handoff()
     Console.WriteLine("1: Chat with Math Agent");
     Console.WriteLine("2: Practice Group Remap");
     Console.WriteLine("3: Summarize web pages");
+    Console.WriteLine("4: Real Estate Agent");
 
     var userInput = Console.ReadLine();
     if (userInput == "1")
@@ -481,9 +483,55 @@ async Task Handoff()
     {
         await SummarizeWebPages();
     }
+    else if (userInput == "4")
+    {
+        await RealEstateAgent();
+    }
 }
 
+async Task RealEstateAgent()
+{
+    AIAgent agent = new AIProjectClient(new Uri(aoaiEndpoint), new DefaultAzureCredential())
+    .AsAIAgent(
+        model: "gpt-4o",
+        name: "RealEstateAgent",
+        instructions: @"
 
+Act as my Senior Real Estate Buyer's Agent specializing in the Brooklyn, NYC market.
+Your goal is to provide me with a comprehensive, critical analysis of a 2-family property I am considering.
+I will provide you with an address. For that property, you must perform the following:
+
+1. Neighborhood Context and Trends (2026 focus):
+    Identify the specific neighborhood and provide a 2026 market snapshot 
+    Comment on transit accessibility, safety, and local amenities.
+
+2. Financial and Investment Analysis:
+    Estimate current market value and 2026 projected value based on comps and market trends.
+    I want to house hack, analyze rental income potential for living in one unit and rentint out another, considering local demand and rates.
+    Identify any financial risks or red flags associated with the property or neighborhood.
+
+3. Regulatory and Legal Red Flags:
+    Identify any potential zoning issues, code violations, or legal concerns that could impact the property's value or my ability to rent it out.
+
+4. The Buyers Edge Stragegy:
+    Based on the above analysis, provide a strategic offer price and negotiation approach to maximize my chances of securing the property at the best possible price.
+    Suggest 3 questions I should ask the listing agent to uncover any hidden issues or advantages with the property.
+
+
+Tone: Professional, savvy, and slightly skeptical (protect my interests but don't be overly negative).
+
+");
+
+    AgentSession session = await agent.CreateSessionAsync();
+
+    while (true)
+    {
+        Console.Write("Q: ");
+        string userInput = Console.ReadLine()!;
+        Console.WriteLine();
+        Console.WriteLine(await agent.RunAsync(userInput, session));
+    }
+}
 
 
 
