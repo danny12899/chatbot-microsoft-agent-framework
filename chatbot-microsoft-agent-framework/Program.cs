@@ -12,19 +12,23 @@ using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Playwright;
 using OpenAI.Assistants;
 using OpenAI.Chat;
 using System.Text.Json;
 
+var configuration = new ConfigurationBuilder()
+    .SetBasePath(AppContext.BaseDirectory)
+    .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+    .AddEnvironmentVariables()
+    .Build();
 
+string? searchEndpoint = configuration["Azure:SearchEndpoint"];
+string? aoaiEndpoint = configuration["Azure:AoaiEndpoint"];
+string? apiKey = configuration["Azure:ApiKey"];
+string? indexName = configuration["Azure:IndexName"];
 
-
-
-string searchEndpoint = "";
-string aoaiEndpoint = "";
-var apiKey = "";
-var indexName = "";
 var credential = new AzureKeyCredential(apiKey);
 var searchClient = new SearchClient(new Uri(searchEndpoint), indexName, credential);
 var indexClient = new SearchIndexClient(new Uri(searchEndpoint), credential);
@@ -298,7 +302,7 @@ async Task SummarizeWebPages()
     var urls = new List<(string, string, string)>
     {
         ("CNBC Market Banner", "https://www.cnbc.com/", "//div[contains(@class, 'MarketsBanner-main')]"),
-        ("CNBC", "https://www.cnbc.com/2026/03/11/stock-market-today-live-updates.html", "//body"),
+        ("CNBC", "https://www.cnbc.com/" + DateTime.Now.ToString("yyyy/MM/dd") + "/stock-market-today-live-updates.html", "//body"),
         ("CNN Fear and Greed Index", "https://www.cnn.com/markets/fear-and-greed", "//div[contains(@class, 'layout__content-wrapper layout-with-rail__content-wrapper')]"),
         ("Yahoo Finance", "https://finance.yahoo.com/", "//section[contains(@class, 'mainContainer ')]"),
         ("Weather", "https://www.wunderground.com/weather/us/ny/new-york-city", "//div[contains(@class, 'today-forecast-wrap')]"),
@@ -331,7 +335,7 @@ async Task SummarizeWebPages()
 
         var summarizeAgent = azureOpenAIClient.GetChatClient("gpt-4o").CreateAIAgent(
                 name: "Summarize Agent",
-                instructions: "You summarize an article."
+                instructions: "You summarize an webpage."
             );
 
         var response = await summarizeAgent.RunAsync(body.Length > 15000 ? body[..15000] : body);
